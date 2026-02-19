@@ -1,6 +1,4 @@
-with 
-
-source as (
+with source as (
 
     select * from {{ source('staging', 'green_tripdata') }}
 
@@ -30,10 +28,7 @@ renamed as (
         total_amount,
         payment_type,
         trip_type,
-        congestion_surcharge,
-        _partitiontime,
-        _partitiondate
-
+        congestion_surcharge
     from source
 
 )
