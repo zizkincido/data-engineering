@@ -1,3 +1,4 @@
+profiles.yml
 .env
 *.parquet
 *.csv
