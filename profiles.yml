@@ -70,7 +70,7 @@ user:
         type: service_account
       method: service-account-json
       project: dt-eng-zmcmp
-      schema: dbt_nytaxi
+      schema: zoomcamp
       scopes:
       - https://www.googleapis.com/auth/bigquery
       - https://www.googleapis.com/auth/cloud-platform
