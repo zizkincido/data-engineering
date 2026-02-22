@@ -3,6 +3,7 @@
         materialized='table'
     )
 }}
+-- depends_on: {{ source('staging', 'yellow_tripdata') }}
 with tripdata as
 (
     select *,
