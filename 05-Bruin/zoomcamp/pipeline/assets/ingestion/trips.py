@@ -1,72 +1,105 @@
 """@bruin
+name: ingestion.trips
 
-# TODO: Set the asset name (recommended pattern: schema.asset_name).
-# - Convention in this module: use an `ingestion.` schema for raw ingestion tables.
-name: TODO_SET_ASSET_NAME
-
-# TODO: Set the asset type.
-# Docs: https://getbruin.com/docs/bruin/assets/python
 type: python
-
-# TODO: Pick a Python image version (Bruin runs Python in isolated environments).
-# Example: python:3.11
-image: TODO_SET_PYTHON_IMAGE
-
-# TODO: Set the connection.
+image: python:3.11
 connection: duckdb-default
-
-# TODO: Choose materialization (optional, but recommended).
-# Bruin feature: Python materialization lets you return a DataFrame (or list[dict]) and Bruin loads it into your destination.
-# This is usually the easiest way to build ingestion assets in Bruin.
-# Alternative (advanced): you can skip Bruin Python materialization and write a "plain" Python asset that manually writes
-# into DuckDB (or another destination) using your own client library and SQL. In that case:
-# - you typically omit the `materialization:` block
-# - you do NOT need a `materialize()` function; you just run Python code
-# Docs: https://getbruin.com/docs/bruin/assets/python#materialization
 materialization:
-  # TODO: choose `table` or `view` (ingestion generally should be a table)
   type: table
-  # TODO: pick a strategy.
-  # suggested strategy: append
-  strategy: TODO
-
-# TODO: Define output columns (names + types) for metadata, lineage, and quality checks.
-# Tip: mark stable identifiers as `primary_key: true` if you plan to use `merge` later.
-# Docs: https://getbruin.com/docs/bruin/assets/columns
+  strategy: append
 columns:
-  - name: TODO_col1
-    type: TODO_type
-    description: TODO
-
+  - name: taxi_type
+    type: text
+  - name: pickup_datetime
+    type: timestamp
+  - name: dropoff_datetime
+    type: timestamp
+  - name: passenger_count
+    type: integer
+  - name: trip_distance
+    type: float
+  - name: extracted_at
+    type: timestamp
 @bruin"""
 
-# TODO: Add imports needed for your ingestion (e.g., pandas, requests).
-# - Put dependencies in the nearest `requirements.txt` (this template has one at the pipeline root).
-# Docs: https://getbruin.com/docs/bruin/assets/python
+import os
+import json
+from datetime import datetime
+
+import pandas as pd
+import requests
 
 
-# TODO: Only implement `materialize()` if you are using Bruin Python materialization.
-# If you choose the manual-write approach (no `materialization:` block), remove this function and implement ingestion
-# as a standard Python script instead.
+def _parse_vars():
+    vars_json = os.getenv("BRUIN_VARS", "{}")
+    return json.loads(vars_json)
+
+
 def materialize():
     """
-    TODO: Implement ingestion using Bruin runtime context.
+    Fetch raw taxi trip CSVs for the run window and return a
+    pandas.DataFrame that Bruin will load into the destination.
 
-    Required Bruin concepts to use here:
-    - Built-in date window variables:
-      - BRUIN_START_DATE / BRUIN_END_DATE (YYYY-MM-DD)
-      - BRUIN_START_DATETIME / BRUIN_END_DATETIME (ISO datetime)
-      Docs: https://getbruin.com/docs/bruin/assets/python#environment-variables
-    - Pipeline variables:
-      - Read JSON from BRUIN_VARS, e.g. `taxi_types`
-      Docs: https://getbruin.com/docs/bruin/getting-started/pipeline-variables
-
-    Design TODOs (keep logic minimal, focus on architecture):
-    - Use start/end dates + `taxi_types` to generate a list of source endpoints for the run window.
-    - Fetch data for each endpoint, parse into DataFrames, and concatenate.
-    - Add a column like `extracted_at` for lineage/debugging (timestamp of extraction).
-    - Prefer append-only in ingestion; handle duplicates in staging.
+    The asset relies on the built‑in environment variables
+    `BRUIN_START_DATE` / `BRUIN_END_DATE` and a pipeline variable
+    `taxi_types` (a list such as ["yellow","green"]).
     """
-    # return final_dataframe
+    start = os.getenv("BRUIN_START_DATE")
+    end = os.getenv("BRUIN_END_DATE")
+    if not start or not end:
+        raise RuntimeError("BRUIN_START_DATE/BRUIN_END_DATE must be set")
 
+    taxi_vars = _parse_vars()
+    taxi_types = taxi_vars.get("taxi_types", ["yellow"])
 
+    start_dt = datetime.fromisoformat(start)
+    end_dt = datetime.fromisoformat(end)
+
+    data_frames = []
+    current = start_dt.replace(day=1)
+    while current <= end_dt:
+        yyyy_mm = current.strftime("%Y-%m")
+        for taxi in taxi_types:
+            url = (
+                f"https://s3.amazonaws.com/nyc-tlc/trip+data/"
+                f"{taxi}_tripdata_{yyyy_mm}.csv"
+            )
+            try:
+                df = pd.read_csv(url)
+            except Exception:
+                # missing file or network error; skip quietly
+                continue
+            df["taxi_type"] = taxi
+            df["extracted_at"] = datetime.utcnow()
+            data_frames.append(df)
+        # advance one month
+        if current.month == 12:
+            current = current.replace(year=current.year + 1, month=1)
+        else:
+            current = current.replace(month=current.month + 1)
+
+    if not data_frames:
+        # return an empty schema-aligned frame
+        return pd.DataFrame(
+            columns=[
+                "taxi_type",
+                "pickup_datetime",
+                "dropoff_datetime",
+                "passenger_count",
+                "trip_distance",
+                "extracted_at",
+            ]
+        )
+
+    result = pd.concat(data_frames, ignore_index=True)
+    # keep only the columns we care about
+    return result[
+        [
+            "taxi_type",
+            "pickup_datetime",
+            "dropoff_datetime",
+            "passenger_count",
+            "trip_distance",
+            "extracted_at",
+        ]
+    ]
